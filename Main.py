@@ -1,192 +1,197 @@
-import requests, io, time, random, sys, os, subprocess
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
-from rich.live import Live
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from PIL import Image
-from colorama import init
+import requests
+import sys
+import time
+import os
+import re
+from datetime import datetime, timedelta
 
-# Initialize Windows Terminal for TrueColor support
-init(autoreset=True)
-# force_terminal=True ensures colors remain after PyInstaller compilation
-console = Console(color_system="truecolor", style="on black", force_terminal=True)
+# Dependency Check
+try:
+    import ascii_magic
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+except ImportError:
+    print("\033[91m[!] Missing dependencies: 'ascii-magic' or 'colorama'.\033[0m")
+    print("\033[93mRun: pip install ascii-magic colorama requests\033[0m")
+    sys.exit(1)
 
-# --- VERSION & UPDATE CONFIG ---
-CURRENT_VERSION = "OpenBeta0.1"
-# REPLACE THESE WITH YOUR ACTUAL GITHUB RAW LINKS
-VERSION_URL = "https://github.com/EnderYT6222/OpenBlox-update-manager/raw/refs/heads/main/version.txt"
-UPDATE_URL = "https://github.com/EnderYT6222/OpenBlox-update-manager/raw/refs/heads/main/OpenBlox_Intel.exe"
+class UI:
+    # Silly Retro "Bricky" Palette
+    BRICK_RED = '\033[38;5;160m'
+    BRIGHT_BLUE = '\033[38;5;39m'
+    SLIME_GREEN = '\033[38;5;118m'
+    SUNNY_YELLOW = '\033[38;5;226m'
+    PLASTIC_GREY = '\033[38;5;248m'
+    NEON_PINK = '\033[38;5;201m'
+    WHITE = '\033[38;5;255m'
+    BOLD = '\033[1m'
+    END = '\033[0m'
 
-# --- THEME CONFIG ---
-P_MAIN = "#8F00FF"  # Electric Purple
-C_WHITE = "#FFFFFF"
+class OpenBloxAPI:
+    @staticmethod
+    def request(method, url, **kwargs):
+        retries = 5
+        for i in range(retries):
+            try:
+                headers = kwargs.get('headers', {})
+                headers['User-Agent'] = 'OpenBlox/Silly-Edition'
+                kwargs['headers'] = headers
+                response = requests.request(method, url, timeout=10, **kwargs)
+                if response.status_code == 429:
+                    time.sleep(2**i)
+                    continue
+                return response
+            except Exception:
+                if i == retries - 1: return None
+                time.sleep(2**i)
+        return None
 
-def check_for_updates():
-    """
-    Checks for updates. If a new version exists, it downloads the 
-    new EXE and uses a batch script to replace the current one.
-    """
+def bricky_loading(text):
+    """Silly retro bouncy loading animation."""
+    frames = ["■□□□", "■■□□", "□■■□", "□□■■", "□□□■", "□□□□"]
+    for _ in range(2):
+        for frame in frames:
+            sys.stdout.write(f"\r {UI.SUNNY_YELLOW}[{frame}] {UI.WHITE}{text}...{UI.END}")
+            sys.stdout.flush()
+            time.sleep(0.1)
+    sys.stdout.write("\r" + " " * 60 + "\r")
+
+def get_avatar_ascii(user_id, columns=50):
     try:
-        console.print(f"[{P_MAIN}]SYSTEM > Checking for updates...[/]")
-        response = requests.get(VERSION_URL, timeout=5)
-        if response.status_code == 200:
-            latest_version = response.text.strip()
-            if latest_version != CURRENT_VERSION:
-                console.print(f"[{P_MAIN}]UPDATE > New version {latest_version} found! Downloading executable...[/]")
-                
-                # Determine current executable path
-                current_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.realpath(sys.argv[0])
-                new_exe_path = current_exe + ".new"
-                
-                # Download new version
-                r = requests.get(UPDATE_URL, stream=True)
-                if r.status_code == 200:
-                    with open(new_exe_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    
-                    console.print("[bold green]UPDATE > Download complete. Applying patch...[/]")
-                    
-                    # Create a batch script to swap files after the current process closes
-                    batch_path = "update_swap.bat"
-                    with open(batch_path, "w") as f:
-                        f.write(f'@echo off\n')
-                        f.write(f'timeout /t 2 /nobreak > nul\n')
-                        f.write(f'del "{current_exe}"\n')
-                        f.write(f'move "{new_exe_path}" "{current_exe}"\n')
-                        f.write(f'start "" "{current_exe}"\n')
-                        f.write(f'del "%~f0"\n')
-                    
-                    # Run batch and exit
-                    subprocess.Popen([batch_path], shell=True)
-                    sys.exit()
-            else:
-                console.print(f"[dim green]SYSTEM > Version {CURRENT_VERSION} is up to date.[/]")
-                time.sleep(1)
-        else:
-            console.print("[dim red]SYSTEM > Update server unreachable.[/]")
-            time.sleep(1)
-    except Exception as e:
-        console.print(f"[dim red]SYSTEM > Update failed: {e}[/]")
-        time.sleep(1)
+        thumb_url = f"https://thumbnails.roblox.com/v1/users/avatar?userIds={user_id}&size=420x420&format=Png&isCircular=false"
+        res = OpenBloxAPI.request("GET", thumb_url)
+        if res and res.status_code == 200:
+            img_url = res.json()['data'][0]['imageUrl']
+            my_art = ascii_magic.from_url(img_url)
+            return my_art.to_ascii(columns=columns, monochrome=False, back=None).splitlines()
+        return [f"{UI.PLASTIC_GREY}[NO BLOCKS FOUND]{UI.END}"]
+    except:
+        return [f"{UI.BRICK_RED}[OOF! AVATAR ERROR]{UI.END}"]
 
-def get_color_ascii(url, width=45):
-    """Downloads image to RAM and manually injects RGB ANSI codes for perfect color."""
-    try:
-        res = requests.get(url, timeout=5)
-        img = Image.open(io.BytesIO(res.content)).convert("RGB")
-        aspect_ratio = img.height / img.width
-        height = int(width * aspect_ratio * 0.48)
-        img = img.resize((width, height), Image.Resampling.LANCZOS)
-        
-        pixels = img.load()
-        chars = ["@", "#", "8", "&", "o", ":", "*", ".", " "]
-        output = Text()
+def get_strict_tags(user_id, username, friends, followers, badges, created_str, is_banned):
+    tags = []
+    join_date = datetime.strptime(created_str[:10], '%Y-%m-%d')
+    now = datetime.now()
 
-        for y in range(height):
-            for x in range(width):
-                r, g, b = pixels[x, y]
-                brightness = sum((r, g, b)) / 3
-                char = chars[min(int(brightness / 32), len(chars)-1)]
-                output.append(char, style=f"rgb({r},{g},{b})")
-            output.append("\n")
-        return output
-    except Exception:
-        return Text("IMAGE_RENDER_FAILED", style="bold red")
-
-def handshake_ui(label="SYNCING"):
-    """Purple packet transfer animation."""
-    frames = [
-        f"💻 [{P_MAIN}]📦[/]       ☁️ ", f"💻   [{P_MAIN}]📦[/]     ☁️ ", 
-        f"💻     [{P_MAIN}]📦[/]   ☁️ ", f"💻       [{P_MAIN}]📦[/] ☁️ ",
-        f"💻         [{P_MAIN}]✔[/] ☁️ ", f"💻       [{P_MAIN}]📦[/] ☁️ "
-    ]
-    with Live(refresh_per_second=12, transient=True) as live:
-        for _ in range(2):
-            for f in frames:
-                live.update(Panel(Text.from_markup(f, justify="center"), border_style=P_MAIN, title=f"[dim]{label}[/]"))
-                time.sleep(0.06)
-
-# --- ENGINE MODULES ---
-
-def fetch_user_intel(target):
-    if not target: return
-    uid = target if target.isdigit() else None
-    if not uid:
-        try:
-            r = requests.post("https://users.roblox.com/v1/usernames/users", json={"usernames": [target]}).json()
-            uid = str(r['data'][0]['id'])
-        except: return console.print(f"[{P_MAIN}]ERROR: USER NOT FOUND[/]")
-
-    handshake_ui("USER_INTEL")
+    if is_banned:
+        tags.append(f"{UI.BRICK_RED}{UI.BOLD}[BANNED BRICK]{UI.END}")
     
-    try:
-        prof = requests.get(f"https://users.roblox.com/v1/users/{uid}").json()
-        pres = requests.post("https://presence.roblox.com/v1/presence/users", json={"userIds": [int(uid)]}).json()
-        groups = requests.get(f"https://groups.roblox.com/v2/users/{uid}/groups/roles").json()
-        thumb = requests.get(f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={uid}&size=150x150&format=Png").json()
-        
-        avatar = get_color_ascii(thumb['data'][0]['imageUrl'], width=36)
-        p_info = pres['userPresences'][0]
-        status = {0: "Offline", 1: "Online", 2: "In Game", 3: "In Studio"}.get(p_info['userPresenceType'], "Unknown")
-        
-        info = Text(f"\n {prof['displayName']} (@{prof['name']})\n", style=f"bold {P_MAIN}")
-        info.append("━" * 40 + "\n", style=C_WHITE)
-        info.append(f" ID:      {uid}\n STATUS:  {status}\n JOINED:  {prof['created'][:10]}\n", style=C_WHITE)
-        
-        if groups.get('data'):
-            g = groups['data'][0]
-            info.append(f" GROUP:   {g['group']['name']}\n RANK:    {g['role']['name']}", style=f"italic {P_MAIN}")
+    if badges > 2000 and followers < 10:
+        tags.append(f"{UI.NEON_PINK}[HACKER MAN]{UI.END}")
 
-        grid = Table.grid(padding=2)
-        grid.add_row(Panel(avatar, title="AVATAR", border_style=P_MAIN), Panel(info, title="SYSTEM_DATA", border_style=C_WHITE))
-        console.print(Panel(grid, title=f"[bold {C_WHITE}]OPENBLOX INTEL[/]", border_style=P_MAIN, expand=False))
-    except Exception as e: console.print(f"[red]USER_FETCH_ERROR: {e}[/]")
+    if followers >= 1000000 and friends >= 20:
+        tags.append(f"{UI.SUNNY_YELLOW}[ULTRA FAMOUS]{UI.END}")
+    elif followers >= 10000 and friends < 20:
+        tags.append(f"{UI.BRICK_RED}{UI.BOLD}[PREDATOR ALERT]{UI.END}")
 
-def fetch_experience_intel(pid):
-    if not pid.isdigit(): return console.print("[red]INVALID ID[/]")
-    handshake_ui("EXP_INTEL")
-    try:
-        u_data = requests.get(f"https://games.roblox.com/v1/games/multiget-place-details?placeIds={pid}").json()
-        if not u_data: raise Exception("Invalid Place ID")
-        univ_id = u_data[0]['universeId']
-        details = requests.get(f"https://games.roblox.com/v1/games?universeIds={univ_id}").json()['data'][0]
-        t_data = requests.get(f"https://thumbnails.roblox.com/v1/games/multiget/thumbnails?universeIds={univ_id}&size=768x432&format=Png").json()
-        render = get_color_ascii(t_data['data'][0]['thumbnails'][0]['imageUrl'], width=65)
-        info = Text(f"\n {details['name']}\n", style=f"bold {P_MAIN}")
-        info.append(f" CREATOR: {details['creator']['name']} | ACTIVE: {details['playing']:,}\n VISITS:  {details['visits']:,}", style=C_WHITE)
-        console.print(Panel(render, title="WORLD_RENDER", border_style=P_MAIN))
-        console.print(Panel(info, border_style=C_WHITE))
-    except Exception: console.print(f"[{P_MAIN}]EXP_ERROR: Check if ID is public.[/]")
+    if 2006 <= join_date.year <= 2016:
+        tags.append(f"{UI.SUNNY_YELLOW}[CLASSIC OG]{UI.END}")
 
-def fetch_group_intel(gid):
-    if not gid.isdigit(): return
-    handshake_ui("GROUP_INTEL")
-    try:
-        res = requests.get(f"https://groups.roblox.com/v1/groups/{gid}").json()
-        members = requests.get(f"https://groups.roblox.com/v1/groups/{gid}/users?sortOrder=Desc&limit=10").json()
-        table = Table(border_style=P_MAIN, title=f"[{C_WHITE}]{res['name']}[/]")
-        table.add_column("Username", style=C_WHITE); table.add_column("Rank", style=P_MAIN)
-        for m in members['data']: table.add_row(m['user']['username'], m['role']['name'])
-        console.print(Panel(f" OWNER: {res['owner']['username']}\n MEMBERS: {res['memberCount']:,}", border_style=P_MAIN))
-        console.print(table)
-    except Exception: console.print("[red]GROUP_ERROR[/]")
+    half_year_ago = now - timedelta(days=182)
+    if join_date > half_year_ago:
+        tags.append(f"{UI.PLASTIC_GREY}[NEWBIE/ALT]{UI.END}")
 
-# --- MAIN LOOP ---
+    if not is_banned:
+        tags.append(f"{UI.SLIME_GREEN}[STILL BLOXIN']{UI.END}")
+
+    return " ".join(tags)
+
+def fetch_user_data(user_id):
+    bricky_loading("Building Blocks")
+    bricky_loading("Finding Noobs")
+    
+    u_res = OpenBloxAPI.request("GET", f"https://users.roblox.com/v1/users/{user_id}")
+    if not u_res or u_res.status_code != 200:
+        print(f"\n {UI.BRICK_RED}{UI.BOLD}[OOF!] THAT USER DOESN'T EXIST!{UI.END}")
+        return
+
+    data = u_res.json()
+    created = data.get('created', '2006-01-01')
+    is_banned = data.get('isBanned', False)
+    display_name = data.get('displayName', 'Noob')
+    
+    # Detailed Data Gathering
+    f_count = OpenBloxAPI.request("GET", f"https://friends.roblox.com/v1/users/{user_id}/friends/count").json().get('count', 0)
+    fol_count = OpenBloxAPI.request("GET", f"https://friends.roblox.com/v1/users/{user_id}/followers/count").json().get('count', 0)
+    following_count = OpenBloxAPI.request("GET", f"https://friends.roblox.com/v1/users/{user_id}/followings/count").json().get('count', 0)
+    b_count = OpenBloxAPI.request("GET", f"https://badges.roblox.com/v1/users/{user_id}/badges?limit=1").json().get('total', 0)
+    
+    # Extra Info: Membership
+    premium_res = OpenBloxAPI.request("GET", f"https://premiumfeatures.roblox.com/v1/users/{user_id}/validate-membership")
+    has_premium = premium_res.json() if premium_res else False
+
+    tags = get_strict_tags(user_id, data['name'], f_count, fol_count, b_count, created, is_banned)
+    ascii_art = get_avatar_ascii(user_id)
+    
+    bio = (data.get('description') or "I'm too shy to write a bio!").replace('\n', ' ')[:55] + "..."
+
+    # Bricky Side Panel
+    info_panel = [
+        f"{UI.BOLD}{UI.SUNNY_YELLOW}WHO DAT?{UI.END}     : {UI.BOLD}{UI.WHITE}{data['name']}{UI.END}",
+        f"{UI.BOLD}{UI.SUNNY_YELLOW}NICKNAME{UI.END}     : {UI.PLASTIC_GREY}{display_name}{UI.END}",
+        f"{UI.BOLD}{UI.SUNNY_YELLOW}BRICK ID{UI.END}     : {UI.BRIGHT_BLUE}{user_id}{UI.END}",
+        f"{UI.PLASTIC_GREY}--------------------------------------------------{UI.END}",
+        f"{UI.BOLD}{UI.WHITE}REPUTATION{UI.END}   : {tags}",
+        f"{UI.BOLD}{UI.WHITE}SPAWN DATE{UI.END}   : {UI.SLIME_GREEN}{created[:10]}{UI.END}",
+        f"{UI.BOLD}{UI.WHITE}PREMIUM?{UI.END}     : {UI.SUNNY_YELLOW + 'YES! (Rich Guy)' if has_premium else UI.PLASTIC_GREY + 'Nope.'}{UI.END}",
+        f"",
+        f"{UI.BRIGHT_BLUE}╔══ BRICKY STATS ══╗{UI.END}",
+        f"{UI.BRIGHT_BLUE}║{UI.END} {UI.WHITE}Friends    : {f_count}{UI.END}",
+        f"{UI.BRIGHT_BLUE}║{UI.END} {UI.WHITE}Followers  : {fol_count}{UI.END}",
+        f"{UI.BRIGHT_BLUE}║{UI.END} {UI.WHITE}Following  : {following_count}{UI.END}",
+        f"{UI.BRIGHT_BLUE}║{UI.END} {UI.WHITE}Shiny Badges: {b_count}{UI.END}",
+        f"{UI.BRIGHT_BLUE}╚══════════════════╝{UI.END}",
+        f"",
+        f"{UI.BOLD}{UI.NEON_PINK}WHAT THEY SAID:{UI.END}",
+        f" {UI.WHITE}“{bio}”{UI.END}",
+        f"",
+        f"{UI.BRICK_RED}■ {UI.BRIGHT_BLUE}■ {UI.SLIME_GREEN}■ {UI.SUNNY_YELLOW}■ {UI.END} {UI.BOLD}BYE BYE!{UI.END}"
+    ]
+
+    # Render Interface
+    print(f"\n{UI.SUNNY_YELLOW}╔{'═'*120}╗{UI.END}")
+    max_h = max(len(ascii_art), len(info_panel))
+    for i in range(max_h):
+        l_img = ascii_art[i] if i < len(ascii_art) else " " * 50
+        r_txt = info_panel[i] if i < len(info_panel) else ""
+        print(f"{UI.SUNNY_YELLOW}║{UI.END} {l_img}  {r_txt}")
+    print(f"{UI.SUNNY_YELLOW}╚{'═'*120}╝{UI.END}\n")
+
+def main():
+    os.system('cls' if os.name == 'nt' else 'clear')
+    
+    # Silly Retro Header
+    header = f"""{UI.BOLD}{UI.BRIGHT_BLUE}
+     _______________________________________________________
+    /                                                       \\
+    |   {UI.SUNNY_YELLOW}█▀█ █▀█ █▀▀ █▄░█ █▄▄ █░░ █▀█ ▀▄▀{UI.BRIGHT_BLUE}                    |
+    |   {UI.SUNNY_YELLOW}█▄█ █▀▀ ██▄ █░▀█ █▄█ █▄▄ █▄█ █░█{UI.BRIGHT_BLUE}                    |
+    |                                                       |
+    |      {UI.WHITE}Beta V0.4 - POWERED BY BRICKS{UI.BRIGHT_BLUE}           |
+    \\_______________________________________________________/
+    """
+    print(header)
+    
+    while True:
+        try:
+            print(f" {UI.SLIME_GREEN}* {UI.WHITE}WHO DO YOU WANT TO SPY ON?{UI.END}")
+            target = input(f" {UI.SLIME_GREEN}> {UI.SUNNY_YELLOW}ROBLOX_ID:{UI.END} ").strip()
+            
+            if not target:
+                continue
+                
+            if target.lower() in ['exit', 'quit', 'stop', 'bye']:
+                print(f"\n {UI.BRICK_RED}SEE YOU LATER, BRICK-HEAD!{UI.END}")
+                break
+
+            if target.isdigit():
+                fetch_user_data(target)
+            else:
+                print(f"\n {UI.BRICK_RED}[!] HEY! USE NUMBERS! (Roblox IDs are numbers silly){UI.END}\n")
+                
+        except KeyboardInterrupt:
+            print(f"\n\n {UI.BRICK_RED}OOF! EMERGENCY SHUTDOWN!{UI.END}")
+            sys.exit(0)
 
 if __name__ == "__main__":
-    check_for_updates() 
-    while True:
-        console.clear()
-        console.print(Panel(Text(f" OPENBLOX INTEL v{CURRENT_VERSION} (COMPILED) ", style=f"bold {C_WHITE} on {P_MAIN}"), border_style=P_MAIN))
-        console.print(f"\n [1] [{P_MAIN}]USER[/]  [2] [{P_MAIN}]EXP[/]  [3] [{P_MAIN}]GROUP[/]  [4] [{P_MAIN}]EXIT[/]")
-        try:
-            choice = console.input(f"\n[{P_MAIN}]SYSTEM > [/]")
-            if choice == "1": fetch_user_intel(console.input(f"[{P_MAIN}]TARGET > [/]"))
-            elif choice == "2": fetch_experience_intel(console.input(f"[{P_MAIN}]PLACE_ID > [/]"))
-            elif choice == "3": fetch_group_intel(console.input(f"[{P_MAIN}]GROUP_ID > [/]"))
-            elif choice == "4": break
-        except KeyboardInterrupt: break
-        console.input(f"\n[dim {P_MAIN}]Press Enter to return...[/]")
+    main()
